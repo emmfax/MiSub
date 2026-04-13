@@ -603,6 +603,10 @@ function parseTuicUrl(url) {
             token = decodeURIComponent(token);
         } catch { }
 
+        const tokenParts = token.split(':');
+        const uuid = tokenParts[0] || '';
+        const password = tokenParts[1] || '';
+
         let serverPart = body.substring(atIndex + 1);
         const queryIndex = serverPart.indexOf('?');
         const hashIndex = serverPart.indexOf('#');
@@ -622,13 +626,15 @@ function parseTuicUrl(url) {
             type: 'tuic',
             server,
             port,
-            token
+            uuid,
+            password
         };
 
         // SNI
-        if (params.has('sni')) {
-            proxy.servername = params.get('sni');
-            proxy.sni = params.get('sni');
+        const sni = params.get('sni');
+        if (sni) {
+            proxy.servername = sni;
+            proxy.sni = sni;
         }
 
         // ALPN
@@ -643,7 +649,7 @@ function parseTuicUrl(url) {
         
         // 拥塞控制
         if (params.get('congestion_control')) {
-            proxy['congestion-controller'] = params.get('congestion_control');
+            proxy['congestion-control'] = params.get('congestion_control');
         }
 
         // UDP Relay Mode
@@ -851,17 +857,22 @@ function parseAnytlsUrl(url) {
         }
 
         const { server, port } = parseHostPort(hostPortStr);
+        const safePort = isNaN(port) ? 443 : port;
         const params = parseQueryParams(url);
         const name = extractName(url);
 
-        const proxy = { name: name || `AnyTLS-${server}`, type: 'anytls', server, port, password };
+        const proxy = { 
+            name: name || `AnyTLS-${server}`, 
+            type: 'anytls', 
+            server, 
+            port: safePort, 
+            password 
+        };
         
-        if (params.has('sni')) {
-            proxy.servername = params.get('sni');
-            proxy.sni = params.get('sni');
-        } else if (params.has('peer')) {
-            proxy.servername = params.get('peer');
-            proxy.sni = params.get('peer');
+        const sni = params.get('sni') || params.get('peer');
+        if (sni) {
+            proxy.servername = sni;
+            proxy.sni = sni;
         }
         
         if (params.get('alpn')) proxy.alpn = params.get('alpn').split(',');
