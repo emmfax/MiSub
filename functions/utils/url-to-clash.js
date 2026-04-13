@@ -143,6 +143,16 @@ function parseVlessUrl(url) {
             }
         }
 
+        // HTTPUpgrade 配置
+        if (network === 'httpupgrade') {
+            const httpupgradeOpts = {};
+            if (params.get('path')) httpupgradeOpts.path = params.get('path');
+            if (params.get('host')) httpupgradeOpts.host = params.get('host');
+            if (Object.keys(httpupgradeOpts).length > 0) {
+                proxy['httpupgrade-opts'] = httpupgradeOpts;
+            }
+        }
+
         // 安全配置
         const security = params.get('security') || 'none';
 
@@ -157,6 +167,11 @@ function parseVlessUrl(url) {
             }
         } else if (security === 'tls') {
             proxy.tls = true;
+        }
+
+        // Skip cert verify (统一支持 allowInsecure 和 insecure)
+        if (params.get('allowInsecure') === '1' || params.get('insecure') === '1') {
+            proxy['skip-cert-verify'] = true;
         }
 
 // SNI (支持 sni 和 peer 两种参数名，Shadowrocket 使用 peer)
@@ -336,11 +351,54 @@ function parseVmessUrl(url) {
             }
         }
 
+        // gRPC 配置
+        if (network === 'grpc') {
+            const grpcOpts = {};
+            if (config.path) grpcOpts['grpc-service-name'] = config.path; // vmess json sometimes use path for serviceName
+            if (config.host) grpcOpts['grpc-service-name'] = config.host; 
+            if (Object.keys(grpcOpts).length > 0) {
+                proxy['grpc-opts'] = grpcOpts;
+            }
+        }
+
+        // H2 (HTTP/2) 配置
+        if (network === 'h2') {
+            const h2Opts = {};
+            if (config.path) h2Opts.path = config.path;
+            if (config.host) h2Opts.host = config.host.split(',').map(h => h.trim());
+            if (Object.keys(h2Opts).length > 0) {
+                proxy['h2-opts'] = h2Opts;
+            }
+        }
+
+        // HTTP 配置
+        if (network === 'http') {
+            const httpOpts = {
+                path: config.path || '/',
+                headers: {
+                    Host: config.host ? config.host.split(',').map(h => h.trim()) : []
+                }
+            };
+            proxy['http-opts'] = httpOpts;
+        }
+
+        // QUIC 配置
+        if (network === 'quic') {
+            const quicOpts = {};
+            if (config.type) quicOpts.header = { type: config.type };
+            if (config.host) quicOpts.security = config.host;
+            if (config.path) quicOpts.key = config.path;
+            if (Object.keys(quicOpts).length > 0) {
+                proxy['quic-opts'] = quicOpts;
+            }
+        }
+
         // TLS
-        if (config.tls === 'tls') {
+        if (config.tls === 'tls' || config.tls === 'reality') {
             proxy.tls = true;
             if (config.sni) proxy.servername = config.sni;
             if (config.fp) proxy['client-fingerprint'] = config.fp;
+            if (config.alpn) proxy.alpn = String(config.alpn).split(',').map(s => s.trim());
         }
 
         // UDP
@@ -498,7 +556,7 @@ function parseHysteria2Url(url) {
         }
 
         // Skip cert verify
-        if (params.get('insecure') === '1') {
+        if (params.get('insecure') === '1' || params.get('allowInsecure') === '1') {
             proxy['skip-cert-verify'] = true;
         }
 
@@ -745,6 +803,7 @@ function parseSnellUrl(url) {
             if (obfsHost) proxy['obfs-opts'].host = obfsHost;
         }
         if (params.get('udp-relay') === 'true') proxy.udp = true;
+        if (params.get('ecn') === 'true' || params.get('ecn') === '1') proxy.ecn = true;
         return proxy;
     } catch (e) {
         console.error('解析 Snell URL 失败:', e);
@@ -786,9 +845,14 @@ function parseAnytlsUrl(url) {
 
         const proxy = { name: name || `AnyTLS-${server}`, type: 'anytls', server, port, password };
         
-        if (params.get('sni')) proxy.sni = params.get('sni');
+        if (params.get('sni')) {
+            proxy.sni = params.get('sni');
+        } else if (params.get('peer')) {
+            proxy.sni = params.get('peer');
+        }
+        
         if (params.get('alpn')) proxy.alpn = params.get('alpn').split(',');
-        if (params.get('insecure') === '1') proxy['skip-cert-verify'] = true;
+        if (params.get('insecure') === '1' || params.get('allowInsecure') === '1') proxy['skip-cert-verify'] = true;
 
         proxy.udp = true;
         return proxy;
