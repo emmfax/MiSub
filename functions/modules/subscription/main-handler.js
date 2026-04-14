@@ -263,6 +263,28 @@ export async function handleMisubRequest(context) {
         }
     }
 
+    const builtinMode = (url.searchParams.get('builtin') || '').toLowerCase();
+    const useBuiltin = builtinMode !== 'external';
+    const currentProfile = profileIdentifier ? allProfiles.find(p => (p.customId && p.customId === profileIdentifier) || p.id === profileIdentifier) : null;
+    
+    const globalTemplateUrl = resolveTemplateUrl(config.transformConfigMode, config.transformConfig, '');
+    const templateUrl = currentProfile
+        ? resolveTemplateUrl(currentProfile.transformConfigMode, currentProfile.transformConfig, globalTemplateUrl)
+        : globalTemplateUrl;
+    const templateSource = resolveTemplateSource(templateUrl);
+
+    // [逻辑统一] 规则等级：URL 参数 > 订阅组设置 > 全局设置 > 默认值 (std)
+    // [重要变更] 如果使用了远程自定义配置 (templateSource.kind === 'remote')，则完全禁用内置等级 (强制为 none)
+    const resolvedProfileLevel = currentProfile?.ruleLevel || currentProfile?.clashRuleLevel || '';
+    const resolvedGlobalLevel = config.ruleLevel || config.clashRuleLevel || 'std';
+    
+    let ruleLevel;
+    if (templateSource.kind === 'remote') {
+        ruleLevel = 'none';
+    } else {
+        ruleLevel = url.searchParams.get('level') || url.searchParams.get('ruleLevel') || resolvedProfileLevel || resolvedGlobalLevel;
+    }
+
     // === 缓存机制：快速响应客户端请求 ===
     const cacheKey = generateCacheKey(
         profileIdentifier ? 'profile' : 'token',
@@ -422,27 +444,6 @@ export async function handleMisubRequest(context) {
         return new Response(btoa(unescape(encodeURIComponent(contentToEncode))), { headers });
     }
 
-    const builtinMode = (url.searchParams.get('builtin') || '').toLowerCase();
-    const useBuiltin = builtinMode !== 'external';
-    const currentProfile = profileIdentifier ? allProfiles.find(p => (p.customId && p.customId === profileIdentifier) || p.id === profileIdentifier) : null;
-    
-    const globalTemplateUrl = resolveTemplateUrl(config.transformConfigMode, config.transformConfig, '');
-    const templateUrl = currentProfile
-        ? resolveTemplateUrl(currentProfile.transformConfigMode, currentProfile.transformConfig, globalTemplateUrl)
-        : globalTemplateUrl;
-    const templateSource = resolveTemplateSource(templateUrl);
-
-    // [逻辑统一] 规则等级：URL 参数 > 订阅组设置 > 全局设置 > 默认值 (std)
-    // [重要变更] 如果使用了远程自定义配置 (templateSource.kind === 'remote')，则完全禁用内置等级 (强制为 none)
-    const resolvedProfileLevel = currentProfile?.ruleLevel || currentProfile?.clashRuleLevel || '';
-    const resolvedGlobalLevel = config.ruleLevel || config.clashRuleLevel || 'std';
-    
-    let ruleLevel;
-    if (templateSource.kind === 'remote') {
-        ruleLevel = 'none';
-    } else {
-        ruleLevel = url.searchParams.get('level') || url.searchParams.get('ruleLevel') || resolvedProfileLevel || resolvedGlobalLevel;
-    }
 
     const builtinOptions = {
         fileName: subName,
@@ -493,8 +494,9 @@ export async function handleMisubRequest(context) {
                 managedConfigUrl,
                 storageAdapter,
                 userInfoHeader
-            }).catch(e => { throw e; });
+            });
 
+            const isJson = targetFormat === 'singbox' || targetFormat === 'sing-box';
             const responseHeaders = new Headers({
                 "Content-Disposition": `attachment; filename="${encodeURIComponent(subName)}"; filename*=utf-8''${encodeURIComponent(subName)}`,
                 'Content-Type': contentType,
@@ -511,11 +513,39 @@ export async function handleMisubRequest(context) {
             Object.entries(resultHeaders).forEach(([k, v]) => responseHeaders.set(k, v));
             Object.entries(cacheHeaders).forEach(([key, value]) => responseHeaders.set(key, value));
 
+            if (!url.searchParams.has('callback_token') && !shouldSkipLogging) {
+                const clientIp = request.headers.get('CF-Connecting-IP')
+                    || request.headers.get('X-Real-IP')
+                    || request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim()
+                    || 'N/A';
+                context.waitUntil(
+                    sendEnhancedTgNotification(
+                        config,
+                        '🛰️ *订阅被访问* (内置转换)',
+                        clientIp,
+                        `*域名:* \`${domain}\`\n*客户端:* \`${userAgentHeader}\`\n*请求格式:* \`${targetFormat}\`\n*订阅组:* \`${subName}\``
+                    )
+                );
+
+                if (config.enableAccessLog) {
+                    logAccessSuccess({
+                        context,
+                        env,
+                        request,
+                        userAgentHeader,
+                        targetFormat: `builtin-${targetFormat}`,
+                        token,
+                        profileIdentifier,
+                        subName,
+                        domain
+                    });
+                }
+            }
+
             return new Response(finalContent, { headers: responseHeaders });
 
         } catch (e) {
-            console.error(`[CRITICAL] Generation crash:`, e);
-            return new Response(`[MiSub Exception] 500 Internal Server Error\n\nDetail: ${e.message}\nStack: ${e.stack}\n\nFormat: ${targetFormat}`, { status: 500 });
+            console.error(`[Builtin${targetFormat}] Generation failed:`, e);
         }
     }
 
